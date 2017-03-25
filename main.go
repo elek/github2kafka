@@ -1,16 +1,16 @@
 package main
 
 import (
-	"net/http"
-	"log"
-	"io/ioutil"
 	"encoding/json"
-	"fmt"
-	"time"
-	"strconv"
-	"github.com/confluentinc/confluent-kafka-go/kafka"
-	"os"
 	"flag"
+	"fmt"
+	"github.com/confluentinc/confluent-kafka-go/kafka"
+	"io/ioutil"
+	"log"
+	"net/http"
+	"os"
+	"strconv"
+	"time"
 )
 
 type KafkaClient struct {
@@ -19,7 +19,7 @@ type KafkaClient struct {
 	producer *kafka.Producer
 }
 
-func (kafkaClient *KafkaClient)open() {
+func (kafkaClient *KafkaClient) open() {
 	var err error
 	kafkaClient.producer, err = kafka.NewProducer(&kafka.ConfigMap{"bootstrap.servers": kafkaClient.broker})
 
@@ -49,7 +49,7 @@ func (kafkaClient *KafkaClient)open() {
 
 }
 
-func (kafkaClient *KafkaClient)close() {
+func (kafkaClient *KafkaClient) close() {
 	kafkaClient.producer.Close()
 }
 
@@ -57,7 +57,8 @@ func (kafkaClient *KafkaClient) sendToKafka(key, message []byte) {
 	print("pushing event")
 	kafkaClient.producer.ProduceChannel() <- &kafka.Message{
 		TopicPartition: kafka.TopicPartition{Topic: &kafkaClient.topic, Partition: kafka.PartitionAny},
-		Value: message}
+		Key:            key,
+		Value:          message}
 
 	print("published")
 
@@ -65,16 +66,16 @@ func (kafkaClient *KafkaClient) sendToKafka(key, message []byte) {
 
 func main() {
 	topic := flag.String("topic", "github", "Kafka topic to use")
-	broker := flag.String("broker", "localhost", "Address of hte kafka broker")
+	broker := flag.String("broker", "localhost", "Address of the kafka broker")
 	username := flag.String("username", "elek", "Github username")
 	password := flag.String("password", "", "Github password")
-	url := flag.String("url", "https://api.github.com/users/me/events/orgs/apache", "github event url to parse")
+	url := flag.String("url", "https://api.github.com/users/"+*username+"/events/orgs/hortonworks", "github event url to parse")
 	flag.Parse()
 
 	client := &http.Client{}
-	producer := KafkaClient{broker:*broker, topic:*topic}
+	producer := KafkaClient{broker: *broker, topic: *topic}
 	producer.open()
-	req, err := http.NewRequest("GET", *url + "?per_page=100", nil)
+	req, err := http.NewRequest("GET", *url+"?per_page=100", nil)
 	if err != nil {
 		log.Fatal("Can't create request", err)
 	}
@@ -85,8 +86,9 @@ func main() {
 		println("Checking github")
 		resp, err := client.Do(req)
 
-		if err != nil {
-			log.Fatal("Can't get the github feed", err)
+		if err != nil || resp.StatusCode > 400 {
+			print(resp.StatusCode)
+			log.Fatal("Can't get the github feed (Status code: %d): %s", resp.StatusCode, err)
 		}
 		defer resp.Body.Close()
 
@@ -99,20 +101,22 @@ func main() {
 		var result []map[string]interface{}
 		err = json.Unmarshal(body, &result)
 		if err != nil {
-			log.Fatal("Can't parse json", err)
+			log.Fatal("Can't parse json: ", err)
+
 		}
 		maxid := int64(0)
 		for _, c := range result {
+			print(c["id"])
 			id, _ := strconv.ParseInt(c["id"].(string), 10, 64)
-			if (id > lastid) {
+			if id > lastid {
 				eventType := string(c["type"].(string))
 				jsonsection, _ := json.Marshal(c)
 				print(string(jsonsection))
 				println(eventType)
-				producer.sendToKafka(jsonsection)
+				producer.sendToKafka([]byte(c["type"].(string)), jsonsection)
 
 			}
-			if (id > maxid ) {
+			if id > maxid {
 				maxid = id
 			}
 
